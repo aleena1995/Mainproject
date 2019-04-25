@@ -1,0 +1,359 @@
+clc;
+clear all;
+close all;
+load net1
+
+% select image
+[f,p]=uigetfile('*.jpg;*.png;*.bmp;*.tif','select image');
+Input=imread([p,f]);
+if size(Input,1)*size(Input,2)>500000
+    Input = imresize(Input,.3); 
+elseif size(Input,1)*size(Input,2)>300000
+    Input = imresize(Input,.2);    
+end
+
+figure;imshow(Input),title('Input image')
+
+% hair removal
+for i = 1:3
+
+Ip = Input(:,:,i);  
+
+Im = medfilt2(Ip,[2 2]);
+
+se = strel('disk',2,4);
+
+Idil = imdilate(Im,se);
+% figure;imshow(Idil),title('Dilation')
+
+Ier = imerode(Idil,se);
+
+Ih(:,:,i) = Ier;
+
+end
+
+figure;imshow(Ih),title('Hair removed')
+
+
+[r, c, p]   = size(Ih);
+if p==3
+I =rgb2gray(Ih);
+end
+figure;imshow(I),title('Grayscale image')
+
+I = double(I);
+
+Ik=kmeans1(I);
+
+% [Ik,C]=kmeans(Input,2);
+
+% Ik = ~Ik;
+
+figure;imshow(Ik,[]);
+title('K means clustering');
+
+Ibw = im2bw(Ik);
+Ibw= ~Ibw;
+figure;imshow(Ibw);
+title('Binary image');
+
+if sum(sum(Ibw))==0
+    
+    disp('Benign')
+    return
+    
+end
+
+bw= bwareaopen(Ibw,30);
+figure,imshow(bw);
+
+se = strel('disk',3*3);
+bw1 = imfill(bw,'holes');
+bw1 = imerode(bw1,se);
+figure;imshow(bw1),title('Eroded Image');
+
+% inner lesion
+for i=1:3
+
+In =   double(Ih(:,:,i));
+I2(:,:,i) = In.*double(bw1);
+
+end
+figure;imshow(uint8(I2)),title('Inner lesion');
+
+if sum(sum(I2))==0
+    
+    disp('Benign')
+    return
+    
+end
+
+% entire lesion
+se = strel('disk',2*2);
+bw2=imdilate(bw,se);
+bw2 = imfill(bw2,'holes');
+figure;imshow(bw2);
+title('Dilated image');  
+bw2 = logical(bw2);
+
+STAT = regionprops(bw2,'Area','PixelIdxList');
+[~,ind2] = max([STAT.Area]);
+STAT(ind2)=[];
+pixels = vertcat(STAT.PixelIdxList);
+bw2(pixels)=0;
+    
+
+for i=1:3
+
+In =   double(Ih(:,:,i))  ;
+I3(:,:,i) = In.*double(bw2);
+
+end
+
+figure;imshow(uint8(I3));
+title('Entire lesion');  
+
+% diffusion region
+I4 = I3-I2;
+figure;imshow(uint8(I4)),title('Diffusion region');  
+
+
+
+% RGB features
+
+% inner lesion features
+mean1r = mean2(I2(:,:,1));
+mean1g = mean2(I2(:,:,2));
+mean1b = mean2(I2(:,:,3));
+
+std1r = std2(I2(:,:,1));
+std1g = std2(I2(:,:,2));
+std1b = std2(I2(:,:,3));
+
+
+% entire lesion features
+mean2r = mean2(I3(:,:,1));
+mean2g = mean2(I3(:,:,2));
+mean2b = mean2(I3(:,:,3));
+
+std2r = std2(I3(:,:,1));
+std2g = std2(I3(:,:,2));
+std2b = std2(I3(:,:,3));
+
+
+% diffusion region features
+mean3r = mean2(I4(:,:,1));
+mean3g = mean2(I4(:,:,2));
+mean3b = mean2(I4(:,:,3));
+
+std3r = std2(I4(:,:,1));
+std3g = std2(I4(:,:,2));
+std3b = std2(I4(:,:,3));
+
+
+
+% ratio of inner and diffusion region
+mean3regR = mean2(I2(:,:,1))/mean2(I4(:,:,1));
+mean3regG = mean2(I2(:,:,2))/mean2(I4(:,:,2));
+mean3regB = mean2(I2(:,:,3))/mean2(I4(:,:,3));
+
+std3regR = std2(I2(:,:,1))/std2(I4(:,:,1));
+std3regG = std2(I2(:,:,2))/std2(I4(:,:,2));
+std3regB = std2(I2(:,:,3))/std2(I4(:,:,3));
+
+
+
+% LUV histogram distances
+
+cform = makecform('srgb2xyz');
+xyz_img = applycform(I2,cform);
+cform = makecform('xyz2uvl');
+Iluv1 = applycform(I2,cform);
+
+% figure;imshow(Iluv1),title('LUV image');  
+
+% Iluv2 = colorspace(I2,'Luv');
+
+Iq1 = Iluv1.*255;
+Iq1 = uint8(Iq1);
+
+hist1 = imhist(Iq1(:));
+
+cform = makecform('srgb2xyz');
+xyz_img = applycform(I4,cform);
+cform = makecform('xyz2uvl');
+Iluv2 = applycform(I4,cform);
+
+Iq2 = Iluv2.*255;
+Iq2 = uint8(Iq2);
+
+hist2 = imhist(Iq2(:));
+
+Dhist = hist1-hist2;
+
+L1norm = norm(Dhist,1);
+L2norm = norm(Dhist,2);
+
+
+% Color diversity features
+
+C1 = uint8(I3(:,:,1));
+H1 = imhist(C1,16);
+len1 = length(H1(H1>200));
+
+
+C2 = uint8(I3(:,:,2));
+H2 = imhist(C2,16);
+len2 = length(H2(H2>200));
+
+C3 = uint8(I3(:,:,3));
+H3 = imhist(C3,16);
+len3 = length(H3(H3>200));
+
+CDF = [len1 len2 len3];
+
+
+% Centroidal distances
+
+STAT1 = regionprops(bw2,'Centroid');
+
+GC = STAT1(1).Centroid;
+
+IR = uint8(I3(:,:,1));
+STAT2 = regionprops(bw2,IR,'WeightedCentroid');
+BC1 = STAT2(1).WeightedCentroid;
+
+IG = I3(:,:,2);
+STAT3 = regionprops(bw2,IG,'WeightedCentroid');
+BC2 = STAT3(1).WeightedCentroid;
+
+IB = I3(:,:,3);
+STAT4 = regionprops(bw2,IB,'WeightedCentroid');
+BC3 = STAT4(1).WeightedCentroid;
+
+CD1 = GC-BC1;
+CD2 = GC-BC2;
+CD3 = GC-BC3;
+
+
+% GLCM features
+
+% inner lesion
+I2g = rgb2gray(I2);
+GLCM2 = graycomatrix(I2g);
+out = GLCM_Features1(GLCM2,0);
+out2 = [out.energ out.entro out.contr out.idmnc out.corrp];
+
+% entire
+I3g = rgb2gray(I3);
+GLCM3 = graycomatrix(I3g);
+out = GLCM_Features1(GLCM3,0);
+out3 = [out.energ out.entro out.contr out.idmnc out.corrp];
+
+% diffusion
+I4g = rgb2gray(I4);
+GLCM4 = graycomatrix(I4g);
+out = GLCM_Features1(GLCM4,0);
+out4 = [out.energ out.entro out.contr out.idmnc out.corrp];
+
+% ratio of diffusion and inner region
+outdi = out4./out2;
+
+% Lesion concavity features --------------------
+
+CH = bwconvhull(bw2);
+figure,imshow(CH),title('convex hull')
+
+% CH_objects = bwconvhull(bw2,'objects');
+% figure,imshow(CH_objects)
+
+
+concavity = CH-bw2;
+figure,imshow(concavity),title('concavity')
+concavity = logical(concavity);
+
+
+stat5 = regionprops(concavity,'all');
+areas = [stat5.Area];
+in = find(areas<=5);
+stat5(in)=[];
+
+% finding span depth and area of each segment
+li = [stat5.MajorAxisLength];
+di = [stat5.MinorAxisLength];
+RAi = [stat5.Area];
+
+
+% mean and std of span
+Means = mean(li);
+Stds = std(li);
+
+% mean and std of depth
+Meand = mean(di);
+Stdd = std(di);
+
+
+% mean and std of avg thickness
+Meant = mean(RAi);
+Stdt = std(RAi);
+
+concfeat = [Means Stds Meand Stdd Meant Stdt];
+
+% separation bw inner and outer borders -------------
+
+
+bord1 = bwboundaries(bw2);    % outer border
+bord1 = bord1{1};
+bord2 = bwboundaries(bw1);    % inner border
+bord2 = bord2{1};
+
+% distance between borders
+for i=1:length(bord1)
+    pi = bord1(i,:);
+    
+    for j=1:length(bord2)
+        pj = bord2(j,:);
+        
+        d1 = (pi(1)-pj(1))^2;
+        d2 = (pi(2)-pj(2))^2;
+        d = sqrt(d1+d2);
+    
+        dij(j) = d;
+        
+    end
+    
+    Di(i) = min(dij);  
+end
+
+
+% delD = var(Di);
+
+muD = mean(Di);
+Np = length(bord1);
+
+del1 = sum((Di-muD).^2)/Np;
+delD = del1;
+
+
+% final feature
+F = [mean1r mean1g mean1b std1r std1g std1b  mean2r mean2g...
+    mean2b std2r std2g std2b mean3r mean3g mean3b std3r std3g std3b mean3regR mean3regG mean3regB std3regR std3regG std3regB L1norm L2norm CDF CD1 CD2 CD3 out2 out3 out4 outdi concfeat delD];
+
+
+% F=F*eigvec;
+
+% classification
+
+a=sim(net1,F');
+ [maxval,ind1]=max(a);
+ 
+ predClass=ind1
+
+
+if predClass==1
+    disp('Benign')
+elseif predClass==2
+    disp('Malign')
+end
+
+
